@@ -16,7 +16,6 @@ import signal
 import subprocess
 import tomllib
 import urllib.request
-from functools import partial
 from pathlib import Path
 
 import gi
@@ -460,42 +459,62 @@ class ElgatoApp(Adw.Application):
         esc.connect("key-pressed", self._on_key_pressed)
         window.add_controller(esc)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        main_box.set_margin_top(16)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        main_box.set_margin_top(12)
         main_box.set_margin_bottom(16)
         main_box.set_margin_start(16)
         main_box.set_margin_end(16)
         window.set_child(main_box)
 
+        # Title header
+        title = Gtk.Label(label="Key Light Control")
+        title.add_css_class("panel-title")
+        title.set_margin_bottom(4)
+        main_box.append(title)
+
+        # Per-light controls
         for light in self._lights:
             ctrl = LightControl(light["name"], light["host"], light["port"])
             self._controls[light["name"]] = ctrl
             main_box.append(ctrl.frame)
 
-        # Preset buttons in a FlowBox so they wrap within PANEL_WIDTH
-        flow = Gtk.FlowBox()
-        flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        flow.set_homogeneous(True)
-        flow.set_max_children_per_line(4)
-        flow.set_min_children_per_line(3)
-        flow.set_column_spacing(6)
-        flow.set_row_spacing(6)
-        flow.set_halign(Gtk.Align.CENTER)
-        flow.set_margin_top(4)
+        # Presets section
+        presets_label = Gtk.Label(label="Presets")
+        presets_label.add_css_class("section-label")
+        presets_label.set_halign(Gtk.Align.START)
+        presets_label.set_margin_top(4)
+        main_box.append(presets_label)
+
+        listbox = Gtk.ListBox()
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        listbox.add_css_class("preset-list")
+        listbox.add_css_class("boxed-list")
 
         for name in ["webcam", "video", "bright", "dim", "warm", "cool"]:
-            if name not in self._presets:
+            preset = self._presets.get(name)
+            if not preset:
                 continue
-            btn = Gtk.Button(label=name.capitalize())
-            btn.add_css_class("preset-btn")
-            btn.connect("clicked", partial(self._on_preset, name=name, preset=self._presets[name]))
-            flow.insert(btn, -1)
+            row = self._make_preset_row(name, preset)
+            listbox.append(row)
 
-        off_btn = Gtk.Button(label="Off")
-        off_btn.add_css_class("destructive-action")
-        off_btn.connect("clicked", self._on_all_off)
-        flow.insert(off_btn, -1)
-        main_box.append(flow)
+        # Off row
+        off_row = Gtk.ListBoxRow()
+        off_row.add_css_class("preset-off-row")
+        off_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        off_box.set_margin_top(8)
+        off_box.set_margin_bottom(8)
+        off_box.set_margin_start(12)
+        off_box.set_margin_end(12)
+        off_label = Gtk.Label(label="All Off")
+        off_label.add_css_class("preset-off-label")
+        off_label.set_hexpand(True)
+        off_label.set_halign(Gtk.Align.CENTER)
+        off_box.append(off_label)
+        off_row.set_child(off_box)
+        listbox.append(off_row)
+
+        listbox.connect("row-activated", self._on_preset_row_activated)
+        main_box.append(listbox)
 
         css = Gtk.CssProvider()
         css.load_from_string("""
@@ -505,9 +524,49 @@ class ElgatoApp(Adw.Application):
                 border: 1px solid rgba(122, 162, 247, 0.3);
                 border-top: none;
             }
+            .panel-title {
+                font-weight: bold;
+                font-size: 15px;
+                color: #cdd6f4;
+                letter-spacing: 0.5px;
+            }
+            .section-label {
+                font-size: 11px;
+                font-weight: bold;
+                color: rgba(205, 214, 244, 0.5);
+                letter-spacing: 1px;
+                text-transform: uppercase;
+            }
             .light-name { font-weight: bold; font-size: 14px; color: #cdd6f4; }
             .light-frame { margin-bottom: 4px; }
-            .preset-btn { min-width: 50px; }
+            .preset-list {
+                background: transparent;
+                border-radius: 8px;
+            }
+            .preset-list row {
+                border-radius: 6px;
+                transition: background-color 150ms ease;
+            }
+            .preset-list row:hover {
+                background-color: rgba(122, 162, 247, 0.08);
+            }
+            .preset-name {
+                font-weight: 600;
+                font-size: 13px;
+                color: #cdd6f4;
+            }
+            .preset-detail {
+                font-size: 12px;
+                color: rgba(205, 214, 244, 0.5);
+            }
+            .preset-off-row:hover {
+                background-color: rgba(243, 139, 168, 0.12);
+            }
+            .preset-off-label {
+                font-weight: 600;
+                font-size: 13px;
+                color: #f38ba8;
+            }
         """)
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -624,17 +683,48 @@ class ElgatoApp(Adw.Application):
         self._hide_panel()
         return True  # Prevent destruction — we reuse the window
 
-    def _on_preset(self, btn: Gtk.Button, name: str, preset: dict) -> None:
-        for light_name, ctrl in self._controls.items():
-            if light_name in preset and isinstance(preset[light_name], dict):
-                override = preset[light_name]
-                ctrl.set_values(override["brightness"], override["temperature"])
-            else:
-                ctrl.set_values(preset.get("brightness", 50), preset.get("temperature", 200))
+    def _make_preset_row(self, name: str, preset: dict) -> Gtk.ListBoxRow:
+        """Build a ListBoxRow for a preset with name and brightness/temperature detail."""
+        row = Gtk.ListBoxRow()
+        row._preset_name = name
+        row._preset_data = preset
 
-    def _on_all_off(self, btn: Gtk.Button) -> None:
-        for ctrl in self._controls.values():
-            ctrl.set_values(ctrl.current_brightness, ctrl.current_temperature, on=False)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        label = Gtk.Label(label=name.capitalize())
+        label.add_css_class("preset-name")
+        label.set_halign(Gtk.Align.START)
+        label.set_hexpand(True)
+        box.append(label)
+
+        # Show brightness + temperature summary
+        bri = preset.get("brightness", 50)
+        temp = preset.get("temperature", 200)
+        kelvin = _temp_to_kelvin(temp)
+        detail = Gtk.Label(label=f"{bri}%  {kelvin}K")
+        detail.add_css_class("preset-detail")
+        detail.set_halign(Gtk.Align.END)
+        box.append(detail)
+
+        row.set_child(box)
+        return row
+
+    def _on_preset_row_activated(self, listbox: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+        if hasattr(row, "_preset_data"):
+            preset = row._preset_data
+            for light_name, ctrl in self._controls.items():
+                if light_name in preset and isinstance(preset[light_name], dict):
+                    override = preset[light_name]
+                    ctrl.set_values(override["brightness"], override["temperature"])
+                else:
+                    ctrl.set_values(preset.get("brightness", 50), preset.get("temperature", 200))
+        else:
+            for ctrl in self._controls.values():
+                ctrl.set_values(ctrl.current_brightness, ctrl.current_temperature, on=False)
 
 
 def main():
