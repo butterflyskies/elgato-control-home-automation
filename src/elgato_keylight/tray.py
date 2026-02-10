@@ -256,9 +256,11 @@ class LightControl:
         label.set_halign(Gtk.Align.START)
         header.append(label)
 
-        self.power_switch = Gtk.Switch()
-        self.power_switch.connect("state-set", self._on_power_toggle)
-        header.append(self.power_switch)
+        self.power_btn = Gtk.ToggleButton()
+        self.power_btn.add_css_class("power-toggle")
+        self.power_btn.set_label("OFF")
+        self.power_btn.connect("toggled", self._on_power_toggled)
+        header.append(self.power_btn)
         box.append(header)
 
         # Brightness
@@ -304,19 +306,24 @@ class LightControl:
         self.current_on = 1 if on else 0
         self.current_brightness = brightness
         self.current_temperature = temperature
-        self.power_switch.set_active(on)
+        self.power_btn.set_active(on)
+        self.power_btn.set_label("ON" if on else "OFF")
         self.brightness_scale.set_value(brightness)
         self.temp_scale.set_value(temperature)
         self.brightness_value.set_label(f"{brightness}%")
         self.temp_value.set_label(f"{_temp_to_kelvin(temperature)}K")
         self._updating_from_api = False
 
-    def _on_power_toggle(self, switch: Gtk.Switch, state: bool) -> bool:
+    def _on_power_toggled(self, btn: Gtk.ToggleButton) -> None:
         if self._updating_from_api:
-            return False
+            return
+        state = btn.get_active()
         self.current_on = 1 if state else 0
-        self._schedule_update()
-        return False
+        btn.set_label("ON" if state else "OFF")
+        try:
+            _set_light_state(self.host, self.port, self.current_on, self.current_brightness, self.current_temperature)
+        except Exception:
+            pass
 
     def _on_slider_changed(self, scale: Gtk.Scale) -> None:
         if self._updating_from_api:
@@ -330,7 +337,8 @@ class LightControl:
         if not self.current_on:
             self.current_on = 1
             self._updating_from_api = True
-            self.power_switch.set_active(True)
+            self.power_btn.set_active(True)
+            self.power_btn.set_label("ON")
             self._updating_from_api = False
         self._schedule_update()
 
@@ -519,6 +527,7 @@ class ElgatoApp(Adw.Application):
         if self._master_switch is not None:
             self._updating_master = True
             self._master_switch.set_active(any_on)
+            self._master_switch.set_label("ON" if any_on else "OFF")
             self._updating_master = False
 
         return True
@@ -552,9 +561,11 @@ class ElgatoApp(Adw.Application):
         title.set_halign(Gtk.Align.START)
         title_box.append(title)
 
-        self._master_switch = Gtk.Switch()
+        self._master_switch = Gtk.ToggleButton()
+        self._master_switch.add_css_class("power-toggle")
+        self._master_switch.set_label("OFF")
         self._master_switch.set_valign(Gtk.Align.CENTER)
-        self._master_switch.connect("state-set", self._on_master_toggle)
+        self._master_switch.connect("toggled", self._on_master_toggled)
         title_box.append(self._master_switch)
         title_box.set_margin_bottom(4)
         main_box.append(title_box)
@@ -632,6 +643,19 @@ class ElgatoApp(Adw.Application):
             }
             .light-name { font-weight: bold; font-size: 14px; color: #cdd6f4; }
             .light-frame { margin-bottom: 4px; }
+            .power-toggle {
+                font-size: 11px;
+                font-weight: 600;
+                padding: 4px 12px;
+                min-height: 0;
+                border-radius: 12px;
+                background: rgba(205, 214, 244, 0.08);
+                color: rgba(205, 214, 244, 0.5);
+            }
+            .power-toggle:checked {
+                background: rgba(166, 227, 161, 0.2);
+                color: #a6e3a1;
+            }
             .preset-list {
                 background: transparent;
                 border-radius: 8px;
@@ -767,20 +791,22 @@ class ElgatoApp(Adw.Application):
         return False
 
 
-    def _on_master_toggle(self, switch: Gtk.Switch, state: bool) -> bool:
+    def _on_master_toggled(self, btn: Gtk.ToggleButton) -> None:
         if self._updating_master:
-            return False
+            return
+        state = btn.get_active()
+        btn.set_label("ON" if state else "OFF")
         on = 1 if state else 0
         for ctrl in self._controls.values():
             ctrl.current_on = on
             ctrl._updating_from_api = True
-            ctrl.power_switch.set_active(state)
+            ctrl.power_btn.set_active(state)
+            ctrl.power_btn.set_label("ON" if state else "OFF")
             ctrl._updating_from_api = False
             try:
                 _set_light_state(ctrl.host, ctrl.port, on, ctrl.current_brightness, ctrl.current_temperature)
             except Exception:
                 pass
-        return False
 
     def _on_panel_close(self, win: Gtk.Window) -> bool:
         self._hide_panel()
