@@ -506,7 +506,7 @@ class ElgatoApp(Adw.Application):
                 if on:
                     any_on = True
                 ctrl = self._controls.get(light["name"])
-                if ctrl:
+                if ctrl and ctrl._debounce_id is None:
                     ctrl.refresh(state.get("brightness", 50), state.get("temperature", 200), bool(on))
             except Exception:
                 pass
