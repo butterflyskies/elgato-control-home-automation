@@ -380,6 +380,8 @@ class ElgatoApp(Adw.Application):
         self._lights: list[dict] = []
         self._presets: dict[str, dict] = {}
         self._controls: dict[str, LightControl] = {}
+        self._updating_master = False
+        self._master_switch: Gtk.Switch | None = None
 
     # --- Lifecycle ---
 
@@ -500,8 +502,12 @@ class ElgatoApp(Adw.Application):
         for light in self._lights:
             try:
                 state = _get_light_state(light["host"], light["port"])
-                if state.get("on", 0):
+                on = state.get("on", 0)
+                if on:
                     any_on = True
+                ctrl = self._controls.get(light["name"])
+                if ctrl:
+                    ctrl.refresh(state.get("brightness", 50), state.get("temperature", 200), bool(on))
             except Exception:
                 pass
 
@@ -509,6 +515,11 @@ class ElgatoApp(Adw.Application):
             self._any_on = any_on
             self._icon_name = ICON_ON if any_on else ICON_OFF
             self._sni_emit("NewIcon")
+
+        if self._master_switch is not None:
+            self._updating_master = True
+            self._master_switch.set_active(any_on)
+            self._updating_master = False
 
         return True
 
@@ -533,11 +544,20 @@ class ElgatoApp(Adw.Application):
         main_box.set_margin_end(16)
         window.set_child(main_box)
 
-        # Title header
+        # Title header with master switch
+        title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         title = Gtk.Label(label="Key Light Control")
         title.add_css_class("panel-title")
-        title.set_margin_bottom(4)
-        main_box.append(title)
+        title.set_hexpand(True)
+        title.set_halign(Gtk.Align.START)
+        title_box.append(title)
+
+        self._master_switch = Gtk.Switch()
+        self._master_switch.set_valign(Gtk.Align.CENTER)
+        self._master_switch.connect("state-set", self._on_master_toggle)
+        title_box.append(self._master_switch)
+        title_box.set_margin_bottom(4)
+        main_box.append(title_box)
 
         # Per-light controls
         for light in self._lights:
@@ -744,6 +764,22 @@ class ElgatoApp(Adw.Application):
         if keyval == Gdk.KEY_Escape:
             self._hide_panel()
             return True
+        return False
+
+
+    def _on_master_toggle(self, switch: Gtk.Switch, state: bool) -> bool:
+        if self._updating_master:
+            return False
+        on = 1 if state else 0
+        for ctrl in self._controls.values():
+            ctrl.current_on = on
+            ctrl._updating_from_api = True
+            ctrl.power_switch.set_active(state)
+            ctrl._updating_from_api = False
+            try:
+                _set_light_state(ctrl.host, ctrl.port, on, ctrl.current_brightness, ctrl.current_temperature)
+            except Exception:
+                pass
         return False
 
     def _on_panel_close(self, win: Gtk.Window) -> bool:
