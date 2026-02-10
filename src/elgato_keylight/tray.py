@@ -346,7 +346,7 @@ class LightControl:
     def _schedule_update(self) -> None:
         if self._debounce_id is not None:
             GLib.source_remove(self._debounce_id)
-        self._debounce_id = GLib.timeout_add(30, self._send_update)
+        self._debounce_id = GLib.idle_add(self._send_update)
 
     def _send_update(self) -> bool:
         self._debounce_id = None
