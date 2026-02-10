@@ -53,7 +53,7 @@ async def _get_status() -> dict:
         avg_brightness = sum(s.brightness for _, s in on_states) // len(on_states)
         text = f"{icon} {avg_brightness}%"
     else:
-        text = f"{icon}"
+        text = f"{icon} off"
 
     # Tooltip with per-light details
     tooltip_lines = []
