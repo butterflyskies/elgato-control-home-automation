@@ -251,60 +251,115 @@ PANEL_MARGIN_TOP = 4  # gap between waybar and panel
 SCREEN_EDGE_PAD = 8   # prevent clipping against screen edge
 
 
+def _get_screen_width() -> int:
+    """Get screen width via hyprctl (Hyprland only)."""
+    try:
+        out = subprocess.check_output(["hyprctl", "monitors", "-j"], timeout=1)
+        monitors = json.loads(out)
+        # Use the focused monitor
+        for m in monitors:
+            if m.get("focused"):
+                return m["width"]
+        if monitors:
+            return monitors[0]["width"]
+    except Exception:
+        pass
+    return 1920  # sensible fallback
+
+
 class ControlPanel(Adw.Application):
     def __init__(self):
         super().__init__(application_id="dev.butterflysky.elgato-panel")
         self.connect("activate", self._on_activate)
-        self._win = None
+        self._panel = None
+        self._backdrop = None
+
+    def _dismiss(self) -> None:
+        """Close both the panel and the backdrop."""
+        if self._backdrop is not None:
+            self._backdrop.close()
+            self._backdrop = None
+        if self._panel is not None:
+            self._panel.close()
+            self._panel = None
 
     def _on_activate(self, app: Adw.Application) -> None:
-        # If already open, toggle it closed (second right-click dismisses)
-        if self._win is not None:
-            self._win.close()
+        # Toggle: if already open, dismiss
+        if self._panel is not None:
+            self._dismiss()
             return
 
-        win = Gtk.Window(application=app)
-        win.set_default_size(PANEL_WIDTH, -1)
-        win.set_resizable(False)
-        win.set_decorated(False)
-        self._win = win
+        # --- Compute position BEFORE creating windows ---
+        screen_width = _get_screen_width()
+        cursor_x = _get_cursor_x()
+        if cursor_x is not None:
+            left = cursor_x - (PANEL_WIDTH // 2)
+            left = max(SCREEN_EDGE_PAD, min(left, screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD))
+        else:
+            left = screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD
 
-        # Layer shell: overlay that drops down from waybar
-        LayerShell.init_for_window(win)
-        LayerShell.set_layer(win, LayerShell.Layer.OVERLAY)
-        LayerShell.set_namespace(win, "elgato-panel")
+        # --- Backdrop: full-screen transparent click catcher ---
+        backdrop = Gtk.Window(application=app)
+        backdrop.set_decorated(False)
+        self._backdrop = backdrop
 
-        # Anchor top — panel hangs from the top edge
-        LayerShell.set_anchor(win, LayerShell.Edge.TOP, True)
-        LayerShell.set_anchor(win, LayerShell.Edge.BOTTOM, False)
-        LayerShell.set_anchor(win, LayerShell.Edge.LEFT, False)
-        LayerShell.set_anchor(win, LayerShell.Edge.RIGHT, False)
+        LayerShell.init_for_window(backdrop)
+        LayerShell.set_layer(backdrop, LayerShell.Layer.OVERLAY)
+        LayerShell.set_namespace(backdrop, "elgato-backdrop")
+        # Anchor all edges = full screen
+        LayerShell.set_anchor(backdrop, LayerShell.Edge.TOP, True)
+        LayerShell.set_anchor(backdrop, LayerShell.Edge.BOTTOM, True)
+        LayerShell.set_anchor(backdrop, LayerShell.Edge.LEFT, True)
+        LayerShell.set_anchor(backdrop, LayerShell.Edge.RIGHT, True)
+        LayerShell.set_exclusive_zone(backdrop, -1)
+        LayerShell.set_keyboard_mode(backdrop, LayerShell.KeyboardMode.NONE)
 
-        # Position: below waybar, horizontally near the cursor (where the widget was clicked)
-        LayerShell.set_margin(win, LayerShell.Edge.TOP, WAYBAR_HEIGHT + PANEL_MARGIN_TOP)
+        # Transparent — just catches clicks
+        backdrop_css = Gtk.CssProvider()
+        backdrop_css.load_from_string("window { background-color: transparent; }")
 
-        # Request keyboard interactivity so we can detect focus loss and Escape
-        LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.ON_DEMAND)
+        # Click anywhere on backdrop = dismiss
+        click = Gtk.GestureClick()
+        click.connect("pressed", lambda *_: self._dismiss())
+        backdrop.add_controller(click)
 
-        # We'll set the horizontal margin after the window is mapped and we know the screen width
-        win.connect("map", self._on_map)
-        win.connect("notify::is-active", self._on_focus_change)
-        win.connect("close-request", self._on_close)
+        backdrop.connect("close-request", self._on_backdrop_close)
 
-        # Escape key closes the panel
+        # --- Panel: the actual controls ---
+        panel = Gtk.Window(application=app)
+        panel.set_default_size(PANEL_WIDTH, -1)
+        panel.set_resizable(False)
+        panel.set_decorated(False)
+        self._panel = panel
+
+        LayerShell.init_for_window(panel)
+        LayerShell.set_layer(panel, LayerShell.Layer.OVERLAY)
+        LayerShell.set_namespace(panel, "elgato-panel")
+        # Anchor top + left, position via margins
+        LayerShell.set_anchor(panel, LayerShell.Edge.TOP, True)
+        LayerShell.set_anchor(panel, LayerShell.Edge.LEFT, True)
+        LayerShell.set_anchor(panel, LayerShell.Edge.BOTTOM, False)
+        LayerShell.set_anchor(panel, LayerShell.Edge.RIGHT, False)
+        LayerShell.set_margin(panel, LayerShell.Edge.TOP, WAYBAR_HEIGHT + PANEL_MARGIN_TOP)
+        LayerShell.set_margin(panel, LayerShell.Edge.LEFT, left)
+        LayerShell.set_exclusive_zone(panel, -1)
+        LayerShell.set_keyboard_mode(panel, LayerShell.KeyboardMode.EXCLUSIVE)
+
+        panel.connect("close-request", self._on_panel_close)
+
+        # Escape key closes
         esc_controller = Gtk.EventControllerKey()
         esc_controller.connect("key-pressed", self._on_key_pressed)
-        win.add_controller(esc_controller)
+        panel.add_controller(esc_controller)
 
-        # Main layout
+        # --- Build panel content ---
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         main_box.set_margin_top(16)
         main_box.set_margin_bottom(16)
         main_box.set_margin_start(16)
         main_box.set_margin_end(16)
-        win.set_child(main_box)
+        panel.set_child(main_box)
 
-        # Light controls
         lights = _load_lights()
         self.controls: dict[str, LightControl] = {}
         for light in lights:
@@ -327,7 +382,6 @@ class ControlPanel(Adw.Application):
             btn.connect("clicked", partial(self._on_preset, name=name, preset=presets[name]))
             preset_box.append(btn)
 
-        # All off button
         off_btn = Gtk.Button(label="Off")
         off_btn.add_css_class("destructive-action")
         off_btn.connect("clicked", self._on_all_off)
@@ -335,11 +389,11 @@ class ControlPanel(Adw.Application):
 
         main_box.append(preset_box)
 
-        # Apply CSS
+        # --- CSS ---
         css = Gtk.CssProvider()
         css.load_from_string(
             """
-            window {
+            window.elgato-panel {
                 background-color: rgba(30, 30, 46, 0.95);
                 border-radius: 0 0 12px 12px;
                 border: 1px solid rgba(122, 162, 247, 0.3);
@@ -350,67 +404,32 @@ class ControlPanel(Adw.Application):
             .preset-btn { min-width: 50px; }
             """
         )
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-
-        win.present()
-
-    def _on_map(self, win: Gtk.Window) -> None:
-        """Position the panel horizontally once we know screen dimensions."""
         display = Gdk.Display.get_default()
-        if display is None:
-            return
+        Gtk.StyleContext.add_provider_for_display(display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.StyleContext.add_provider_for_display(display, backdrop_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        surface = win.get_surface()
-        if surface is None:
-            return
+        panel.add_css_class("elgato-panel")
 
-        monitor = display.get_monitor_at_surface(surface)
-        if monitor is None:
-            # Fall back to first monitor
-            monitors = display.get_monitors()
-            if monitors.get_n_items() > 0:
-                monitor = monitors.get_item(0)
-            else:
-                return
-
-        screen_width = monitor.get_geometry().width
-
-        # Try to center the panel on the cursor X position
-        cursor_x = _get_cursor_x()
-        if cursor_x is not None:
-            # Calculate left margin so panel is centered on cursor
-            left = cursor_x - (PANEL_WIDTH // 2)
-            # Clamp so the panel doesn't clip off either edge
-            left = max(SCREEN_EDGE_PAD, min(left, screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD))
-        else:
-            # Fallback: right-aligned with padding
-            left = screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD
-
-        # Layer shell: anchor left edge and set left margin for positioning
-        LayerShell.set_anchor(win, LayerShell.Edge.LEFT, True)
-        LayerShell.set_margin(win, LayerShell.Edge.LEFT, left)
-
-    def _on_focus_change(self, win: Gtk.Window, pspec) -> None:
-        """Close when the panel loses focus."""
-        if not win.is_active():
-            # Small delay to avoid closing during transient focus changes (e.g. slider grab)
-            GLib.timeout_add(150, self._check_still_unfocused, win)
-
-    def _check_still_unfocused(self, win: Gtk.Window) -> bool:
-        if not win.is_active():
-            win.close()
-        return False
+        # Show backdrop first, then panel on top
+        backdrop.present()
+        panel.present()
 
     def _on_key_pressed(self, controller, keyval, keycode, state) -> bool:
         if keyval == Gdk.KEY_Escape:
-            self._win.close()
+            self._dismiss()
             return True
         return False
 
-    def _on_close(self, win: Gtk.Window) -> bool:
-        self._win = None
+    def _on_panel_close(self, win: Gtk.Window) -> bool:
+        self._panel = None
+        # Also close backdrop if panel is closed directly
+        if self._backdrop is not None:
+            self._backdrop.close()
+            self._backdrop = None
+        return False
+
+    def _on_backdrop_close(self, win: Gtk.Window) -> bool:
+        self._backdrop = None
         return False
 
     def _on_preset(self, btn: Gtk.Button, name: str, preset: dict) -> None:
