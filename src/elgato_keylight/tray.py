@@ -472,9 +472,16 @@ class ElgatoApp(Adw.Application):
             self._controls[light["name"]] = ctrl
             main_box.append(ctrl.frame)
 
-        preset_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        preset_box.set_halign(Gtk.Align.CENTER)
-        preset_box.set_margin_top(4)
+        # Preset buttons in a FlowBox so they wrap within PANEL_WIDTH
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_max_children_per_line(4)
+        flow.set_min_children_per_line(3)
+        flow.set_column_spacing(6)
+        flow.set_row_spacing(6)
+        flow.set_halign(Gtk.Align.CENTER)
+        flow.set_margin_top(4)
 
         for name in ["webcam", "video", "bright", "dim", "warm", "cool"]:
             if name not in self._presets:
@@ -482,13 +489,13 @@ class ElgatoApp(Adw.Application):
             btn = Gtk.Button(label=name.capitalize())
             btn.add_css_class("preset-btn")
             btn.connect("clicked", partial(self._on_preset, name=name, preset=self._presets[name]))
-            preset_box.append(btn)
+            flow.insert(btn, -1)
 
         off_btn = Gtk.Button(label="Off")
         off_btn.add_css_class("destructive-action")
         off_btn.connect("clicked", self._on_all_off)
-        preset_box.append(off_btn)
-        main_box.append(preset_box)
+        flow.insert(off_btn, -1)
+        main_box.append(flow)
 
         css = Gtk.CssProvider()
         css.load_from_string("""
