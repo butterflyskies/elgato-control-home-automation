@@ -382,15 +382,32 @@ class ElgatoApp(Adw.Application):
             Gio.BusNameOwnerFlags.NONE, None, None,
         )
 
-        bus.call_sync(
-            "org.kde.StatusNotifierWatcher",
-            "/StatusNotifierWatcher",
-            "org.kde.StatusNotifierWatcher",
-            "RegisterStatusNotifierItem",
-            GLib.Variant("(s)", (self._bus_name,)),
-            None, Gio.DBusCallFlags.NONE, -1, None,
+        self._register_with_watcher()
+
+        # Re-register when the watcher restarts (e.g. waybar reload)
+        Gio.bus_watch_name_on_connection(
+            bus, "org.kde.StatusNotifierWatcher",
+            Gio.BusNameWatcherFlags.NONE,
+            self._on_watcher_appeared,
+            None,
         )
-        self._tray_registered = True
+
+    def _register_with_watcher(self) -> None:
+        try:
+            self._bus.call_sync(
+                "org.kde.StatusNotifierWatcher",
+                "/StatusNotifierWatcher",
+                "org.kde.StatusNotifierWatcher",
+                "RegisterStatusNotifierItem",
+                GLib.Variant("(s)", (self._bus_name,)),
+                None, Gio.DBusCallFlags.NONE, -1, None,
+            )
+            self._tray_registered = True
+        except Exception:
+            self._tray_registered = False
+
+    def _on_watcher_appeared(self, conn, name, owner) -> None:
+        self._register_with_watcher()
 
     def _sni_method_call(self, conn, sender, path, iface, method, params, invocation):
         if method in ("Activate", "ContextMenu"):
