@@ -71,6 +71,36 @@ SNI_XML = """
 </node>
 """
 
+DBUSMENU_XML = """
+<node>
+  <interface name="com.canonical.dbusmenu">
+    <method name="GetLayout">
+      <arg name="parentId" type="i" direction="in"/>
+      <arg name="recursionDepth" type="i" direction="in"/>
+      <arg name="propertyNames" type="as" direction="in"/>
+      <arg name="revision" type="u" direction="out"/>
+      <arg name="layout" type="(ia{sv}av)" direction="out"/>
+    </method>
+    <method name="Event">
+      <arg name="id" type="i" direction="in"/>
+      <arg name="eventId" type="s" direction="in"/>
+      <arg name="data" type="v" direction="in"/>
+      <arg name="timestamp" type="u" direction="in"/>
+    </method>
+    <method name="AboutToShow">
+      <arg name="id" type="i" direction="in"/>
+      <arg name="needUpdate" type="b" direction="out"/>
+    </method>
+    <property name="Version" type="u" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <signal name="LayoutUpdated">
+      <arg type="u"/>
+      <arg type="i"/>
+    </signal>
+  </interface>
+</node>
+"""
+
 
 # --- HTTP helpers (stdlib only — no httpx, runs on system python) ---
 
@@ -151,11 +181,6 @@ def _hyprctl_j(cmd: str) -> dict | list:
 
 def _hyprctl_dispatch(cmd: str) -> None:
     subprocess.run(["hyprctl", "dispatch", cmd], timeout=1,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def _hyprctl_keyword(key: str, value: str) -> None:
-    subprocess.run(["hyprctl", "keyword", key, value], timeout=1,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -360,20 +385,10 @@ class ElgatoApp(Adw.Application):
 
         self._build_panel()
 
-        # Map the panel window once (invisible, off-screen) so it's always mapped.
-        # Future show/hide just moves it on/off screen — no re-map, no placement animation.
-        _hyprctl_batch([
-            f"keyword windowrulev2 float,class:{APP_ID}",
-            f"keyword windowrulev2 pin,class:{APP_ID}",
-            f"keyword windowrulev2 noanim,class:{APP_ID}",
-            f"keyword windowrulev2 noborder,class:{APP_ID}",
-            f"keyword windowrulev2 noshadow,class:{APP_ID}",
-            f"keyword windowrulev2 opacity 0.0 override 0.0 override,class:{APP_ID}",
-        ])
+        # Map the panel once off-screen. Static hyprland rules handle
+        # float/pin/noanim/noborder/noshadow. Future show/hide just moves it.
         self._panel_window.present()
-        # Park off-screen after the map event processes (idle fires after pending events)
         GLib.idle_add(self._park_panel_offscreen)
-        # Defer status poll so it doesn't block the parking
         GLib.idle_add(self._poll_status)
         GLib.timeout_add_seconds(POLL_SECONDS, self._poll_status)
 
@@ -384,16 +399,8 @@ class ElgatoApp(Adw.Application):
         self._toggle_panel()
 
     def _park_panel_offscreen(self) -> bool:
-        """After initial map, move off-screen and clear one-shot opacity rule."""
-        _hyprctl_batch([
-            f"dispatch movewindowpixel exact 99999 99999,class:{APP_ID}",
-            f"keyword windowrulev2 unset,class:{APP_ID}",
-            f"keyword windowrulev2 float,class:{APP_ID}",
-            f"keyword windowrulev2 pin,class:{APP_ID}",
-            f"keyword windowrulev2 noanim,class:{APP_ID}",
-            f"keyword windowrulev2 noborder,class:{APP_ID}",
-            f"keyword windowrulev2 noshadow,class:{APP_ID}",
-        ])
+        """After initial map, park the panel off-screen."""
+        _hyprctl_dispatch(f"movewindowpixel exact 99999 99999,class:{APP_ID}")
         return False
 
     # --- SNI Tray ---
@@ -408,6 +415,16 @@ class ElgatoApp(Adw.Application):
             node.interfaces[0],
             self._sni_method_call,
             self._sni_get_property,
+            None,
+        )
+
+        # Register dbusmenu for right-click context menu
+        menu_node = Gio.DBusNodeInfo.new_for_xml(DBUSMENU_XML)
+        bus.register_object(
+            "/MenuBar",
+            menu_node.interfaces[0],
+            self._menu_method_call,
+            self._menu_get_property,
             None,
         )
 
@@ -445,7 +462,7 @@ class ElgatoApp(Adw.Application):
         self._register_with_watcher()
 
     def _sni_method_call(self, conn, sender, path, iface, method, params, invocation):
-        if method in ("Activate", "ContextMenu"):
+        if method == "Activate":
             self._toggle_panel()
         elif method == "SecondaryActivate":
             subprocess.Popen(["elgato", "toggle"])
@@ -462,12 +479,12 @@ class ElgatoApp(Adw.Application):
         props = {
             "Category": GLib.Variant("s", "Hardware"),
             "Id": GLib.Variant("s", "elgato-keylight"),
-            "Title": GLib.Variant("s", "Elgato Key Lights"),
+            "Title": GLib.Variant("s", ""),
             "Status": GLib.Variant("s", "Active"),
             "IconName": GLib.Variant("s", self._icon_name),
             "IconThemePath": GLib.Variant("s", ""),
             "ItemIsMenu": GLib.Variant("b", False),
-            "Menu": GLib.Variant("o", "/NO_DBUSMENU"),
+            "Menu": GLib.Variant("o", "/MenuBar"),
         }
         return props.get(prop)
 
@@ -477,6 +494,38 @@ class ElgatoApp(Adw.Application):
                 None, "/StatusNotifierItem",
                 "org.kde.StatusNotifierItem", signal_name, None,
             )
+
+    # --- DBusMenu (right-click context menu) ---
+
+    def _menu_method_call(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetLayout":
+            # Root item (id=0) with one child: Quit (id=1)
+            quit_props = {
+                "label": GLib.Variant("s", "Quit"),
+                "icon-name": GLib.Variant("s", "application-exit"),
+                "enabled": GLib.Variant("b", True),
+                "visible": GLib.Variant("b", True),
+            }
+            quit_item = GLib.Variant("v", GLib.Variant("(ia{sv}av)", (1, quit_props, [])))
+            root_props = {"children-display": GLib.Variant("s", "submenu")}
+            layout = GLib.Variant("(ia{sv}av)", (0, root_props, [quit_item]))
+            invocation.return_value(GLib.Variant("(u(ia{sv}av))", (1, (0, root_props, [quit_item]))))
+        elif method == "Event":
+            item_id, event_id, _, _ = params.unpack()
+            if item_id == 1 and event_id == "clicked":
+                self.quit()
+            invocation.return_value(None)
+        elif method == "AboutToShow":
+            invocation.return_value(GLib.Variant("(b)", (False,)))
+        else:
+            invocation.return_value(None)
+
+    def _menu_get_property(self, conn, sender, path, iface, prop):
+        props = {
+            "Version": GLib.Variant("u", 3),
+            "Status": GLib.Variant("s", "normal"),
+        }
+        return props.get(prop)
 
     # --- Status Polling ---
 
@@ -571,7 +620,7 @@ class ElgatoApp(Adw.Application):
         css = Gtk.CssProvider()
         css.load_from_string("""
             window {
-                background-color: rgba(30, 30, 46, 0.98);
+                background-color: rgba(30, 30, 46, 0.92);
                 border-radius: 0 0 12px 12px;
                 border: 1px solid rgba(122, 162, 247, 0.3);
                 border-top: none;
@@ -666,13 +715,12 @@ class ElgatoApp(Adw.Application):
                       min(panel_x, mon_x + eff_w - PANEL_WIDTH - SCREEN_EDGE_PAD))
         panel_y = mon_y + WAYBAR_HEIGHT + PANEL_GAP
 
-        # Window is already mapped off-screen — just move it into place
+        # Window is always mapped — just move it into place and focus
         _hyprctl_batch([
             f"dispatch movewindowpixel exact {panel_x} {panel_y},class:{APP_ID}",
             f"dispatch focuswindow class:{APP_ID}",
         ])
         self._panel_visible = True
-
         GLib.timeout_add(700, self._start_focus_poll)
 
     def _hide_panel(self) -> None:
