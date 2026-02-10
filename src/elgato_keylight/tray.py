@@ -128,7 +128,7 @@ def _discover_lights() -> list[dict]:
     lights = []
     seen = set()
     for line in out.splitlines():
-        # Resolved IPv4 lines: =;iface;IPv4;name;_elg._tcp;domain;hostname;ip;port;txt
+        # Resolved IPv4 lines: =;iface;IPv4;name;_elg._tcp;domain;hostname;ip;port;txt...
         if not line.startswith("=") or ";IPv4;" not in line:
             continue
         parts = line.split(";")
@@ -140,11 +140,18 @@ def _discover_lights() -> list[dict]:
         if host in seen:
             continue
         seen.add(host)
-        # Extract short name: "Elgato Key Light - right" → "right"
+        # Extract short name: "Elgato Key Light - right" -> "right"
         name = raw_name
         if " - " in raw_name:
             name = raw_name.split(" - ", 1)[1].strip()
-        lights.append({"name": name.lower(), "host": host, "port": port})
+        # Extract device ID from TXT record: "id=3C:6A:9D:1A:36:45"
+        device_id = ""
+        txt = ";".join(parts[9:]) if len(parts) > 9 else ""
+        for token in txt.replace('"', " ").split():
+            if token.startswith("id="):
+                device_id = token[3:]
+                break
+        lights.append({"name": name.lower(), "host": host, "port": port, "id": device_id})
 
     lights.sort(key=lambda l: l["name"])
     return lights
@@ -154,8 +161,8 @@ def _load_presets() -> dict[str, dict]:
     config_path = Path.home() / ".config" / "elgato-keylight" / "config.toml"
     defaults = {
         "webcam": {"brightness": 32, "temperature": 179,
-                    "right": {"brightness": 18, "temperature": 181},
-                    "left": {"brightness": 46, "temperature": 177}},
+                    "3C:6A:9D:1A:36:45": {"brightness": 18, "temperature": 181},
+                    "3C:6A:9D:1A:36:46": {"brightness": 46, "temperature": 177}},
         "bright": {"brightness": 100, "temperature": 200},
         "dim": {"brightness": 15, "temperature": 250},
         "warm": {"brightness": 60, "temperature": 320},
@@ -167,9 +174,7 @@ def _load_presets() -> dict[str, dict]:
             data = tomllib.load(f)
         presets = data.get("presets", {})
         if presets:
-            merged = dict(defaults)
-            merged.update(presets)
-            return merged
+            return presets
     return defaults
 
 
@@ -222,10 +227,11 @@ def _temp_to_kelvin(temp: int) -> int:
 class LightControl:
     """Slider controls for a single light."""
 
-    def __init__(self, name: str, host: str, port: int):
+    def __init__(self, name: str, host: str, port: int, device_id: str = ""):
         self.name = name
         self.host = host
         self.port = port
+        self.device_id = device_id
         self._debounce_id: int | None = None
         self._updating_from_api = False
         self.current_on = 0
@@ -535,7 +541,7 @@ class ElgatoApp(Adw.Application):
 
         # Per-light controls
         for light in self._lights:
-            ctrl = LightControl(light["name"], light["host"], light["port"])
+            ctrl = LightControl(light["name"], light["host"], light["port"], light.get("id", ""))
             self._controls[light["name"]] = ctrl
             main_box.append(ctrl.frame)
 
@@ -551,10 +557,7 @@ class ElgatoApp(Adw.Application):
         listbox.add_css_class("preset-list")
         listbox.add_css_class("boxed-list")
 
-        for name in ["webcam", "video", "bright", "dim", "warm", "cool"]:
-            preset = self._presets.get(name)
-            if not preset:
-                continue
+        for name, preset in self._presets.items():
             row = self._make_preset_row(name, preset)
             listbox.append(row)
 
@@ -589,7 +592,7 @@ class ElgatoApp(Adw.Application):
         css = Gtk.CssProvider()
         css.load_from_string("""
             window {
-                background-color: rgba(30, 30, 46, 0.82);
+                background-color: rgba(30, 30, 46, 0.65);
                 border-radius: 0 0 12px 12px;
                 border: 1px solid rgba(122, 162, 247, 0.3);
                 border-top: none;
@@ -776,17 +779,18 @@ class ElgatoApp(Adw.Application):
                 spacer.set_hexpand(True)
                 line.append(spacer)
 
-            # Resolve per-light override
-            light_name = light["name"]
-            if light_name in preset and isinstance(preset[light_name], dict):
-                bri = preset[light_name]["brightness"]
-                temp = preset[light_name]["temperature"]
+            # Resolve per-device override by device ID
+            device_id = light.get("id", "")
+            device_settings = preset.get(device_id) if device_id else None
+            if isinstance(device_settings, dict):
+                bri = device_settings["brightness"]
+                temp = device_settings["temperature"]
             else:
                 bri = preset.get("brightness", 50)
                 temp = preset.get("temperature", 200)
 
             kelvin = _temp_to_kelvin(temp)
-            detail = Gtk.Label(label=f"{light_name}  {bri}%  {kelvin}K")
+            detail = Gtk.Label(label=f"{light['name']}  {bri}%  {kelvin}K")
             detail.add_css_class("preset-detail")
             detail.set_halign(Gtk.Align.END)
             line.append(detail)
@@ -800,9 +804,10 @@ class ElgatoApp(Adw.Application):
         if hasattr(row, "_preset_data"):
             preset = row._preset_data
             for light_name, ctrl in self._controls.items():
-                if light_name in preset and isinstance(preset[light_name], dict):
-                    override = preset[light_name]
-                    ctrl.set_values(override["brightness"], override["temperature"])
+                # Look up per-device override by device ID
+                device_settings = preset.get(ctrl.device_id) if ctrl.device_id else None
+                if isinstance(device_settings, dict):
+                    ctrl.set_values(device_settings["brightness"], device_settings["temperature"])
                 else:
                     ctrl.set_values(preset.get("brightness", 50), preset.get("temperature", 200))
         else:
