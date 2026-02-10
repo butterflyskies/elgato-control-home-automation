@@ -103,6 +103,7 @@ def _set_light_state(host: str, port: int, on: int, brightness: int, temperature
 
 
 def _load_lights() -> list[dict]:
+    """Load lights from config file, falling back to mDNS discovery."""
     config_path = Path.home() / ".config" / "elgato-keylight" / "config.toml"
     if config_path.exists():
         with open(config_path, "rb") as f:
@@ -111,10 +112,42 @@ def _load_lights() -> list[dict]:
         if lights:
             return [{"name": l["name"], "host": l["host"], "port": l.get("port", 9123)} for l in lights]
 
-    return [
-        {"name": "right", "host": "192.168.0.60", "port": 9123},
-        {"name": "left", "host": "192.168.0.62", "port": 9123},
-    ]
+    return _discover_lights()
+
+
+def _discover_lights() -> list[dict]:
+    """Discover Elgato lights via mDNS (avahi-browse)."""
+    try:
+        out = subprocess.check_output(
+            ["avahi-browse", "-rpt", "_elg._tcp"],
+            timeout=5, stderr=subprocess.DEVNULL,
+        ).decode()
+    except Exception:
+        return []
+
+    lights = []
+    seen = set()
+    for line in out.splitlines():
+        # Resolved IPv4 lines: =;iface;IPv4;name;_elg._tcp;domain;hostname;ip;port;txt
+        if not line.startswith("=") or ";IPv4;" not in line:
+            continue
+        parts = line.split(";")
+        if len(parts) < 9:
+            continue
+        raw_name = parts[3].replace("\\032", " ")
+        host = parts[7]
+        port = int(parts[8])
+        if host in seen:
+            continue
+        seen.add(host)
+        # Extract short name: "Elgato Key Light - right" → "right"
+        name = raw_name
+        if " - " in raw_name:
+            name = raw_name.split(" - ", 1)[1].strip()
+        lights.append({"name": name.lower(), "host": host, "port": port})
+
+    lights.sort(key=lambda l: l["name"])
+    return lights
 
 
 def _load_presets() -> dict[str, dict]:
@@ -715,33 +748,52 @@ class ElgatoApp(Adw.Application):
         return True  # Prevent destruction — we reuse the window
 
     def _make_preset_row(self, name: str, preset: dict) -> Gtk.ListBoxRow:
-        """Build a ListBoxRow for a preset with name and brightness/temperature detail."""
+        """Build a ListBoxRow for a preset with per-device brightness/temperature."""
         row = Gtk.ListBoxRow()
         row._preset_name = name
         row._preset_data = preset
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        outer.set_margin_top(8)
+        outer.set_margin_bottom(8)
+        outer.set_margin_start(12)
+        outer.set_margin_end(12)
 
-        label = Gtk.Label(label=name.capitalize())
-        label.add_css_class("preset-name")
-        label.set_halign(Gtk.Align.START)
-        label.set_hexpand(True)
-        box.append(label)
+        # Preset name on top line, per-device details below
+        for i, light in enumerate(self._lights):
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-        # Show brightness + temperature summary
-        bri = preset.get("brightness", 50)
-        temp = preset.get("temperature", 200)
-        kelvin = _temp_to_kelvin(temp)
-        detail = Gtk.Label(label=f"{bri}%  {kelvin}K")
-        detail.add_css_class("preset-detail")
-        detail.set_halign(Gtk.Align.END)
-        box.append(detail)
+            if i == 0:
+                # First line: preset name on the left
+                label = Gtk.Label(label=name.capitalize())
+                label.add_css_class("preset-name")
+                label.set_halign(Gtk.Align.START)
+                label.set_hexpand(True)
+                line.append(label)
+            else:
+                # Subsequent lines: empty spacer on the left
+                spacer = Gtk.Label(label="")
+                spacer.set_hexpand(True)
+                line.append(spacer)
 
-        row.set_child(box)
+            # Resolve per-light override
+            light_name = light["name"]
+            if light_name in preset and isinstance(preset[light_name], dict):
+                bri = preset[light_name]["brightness"]
+                temp = preset[light_name]["temperature"]
+            else:
+                bri = preset.get("brightness", 50)
+                temp = preset.get("temperature", 200)
+
+            kelvin = _temp_to_kelvin(temp)
+            detail = Gtk.Label(label=f"{light_name}  {bri}%  {kelvin}K")
+            detail.add_css_class("preset-detail")
+            detail.set_halign(Gtk.Align.END)
+            line.append(detail)
+
+            outer.append(line)
+
+        row.set_child(outer)
         return row
 
     def _on_preset_row_activated(self, listbox: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
