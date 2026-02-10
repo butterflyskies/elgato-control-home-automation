@@ -1,17 +1,19 @@
-"""GTK4 control panel for Elgato Key Lights — per-light brightness and temperature sliders."""
+"""GTK4 control panel for Elgato Key Lights — drops down from waybar widget."""
 
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.request
 from functools import partial
-from typing import Any
 
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+gi.require_version("Gtk4LayerShell", "1.0")
+from gi.repository import Adw, Gdk, GLib, Gtk, Gtk4LayerShell as LayerShell  # noqa: E402
 
 
 # --- Elgato HTTP helpers (stdlib only, no httpx) ---
@@ -93,6 +95,16 @@ def _load_presets() -> dict[str, dict]:
 
 def _temp_to_kelvin(temp: int) -> int:
     return int(1_000_000 / temp) if temp > 0 else 0
+
+
+def _get_cursor_x() -> int | None:
+    """Get cursor X position via hyprctl (Hyprland only)."""
+    try:
+        out = subprocess.check_output(["hyprctl", "cursorpos", "-j"], timeout=1)
+        data = json.loads(out)
+        return data.get("x", None)
+    except Exception:
+        return None
 
 
 # --- GTK4 Panel ---
@@ -233,22 +245,56 @@ class LightControl:
         self._schedule_update()
 
 
+PANEL_WIDTH = 380
+WAYBAR_HEIGHT = 36
+PANEL_MARGIN_TOP = 4  # gap between waybar and panel
+SCREEN_EDGE_PAD = 8   # prevent clipping against screen edge
+
+
 class ControlPanel(Adw.Application):
     def __init__(self):
         super().__init__(application_id="dev.butterflysky.elgato-panel")
         self.connect("activate", self._on_activate)
+        self._win = None
 
     def _on_activate(self, app: Adw.Application) -> None:
-        # Check for existing window
-        win = app.get_active_window()
-        if win:
-            win.present()
+        # If already open, toggle it closed (second right-click dismisses)
+        if self._win is not None:
+            self._win.close()
             return
 
-        win = Adw.ApplicationWindow(application=app)
-        win.set_title("Key Lights")
-        win.set_default_size(380, -1)
+        win = Gtk.Window(application=app)
+        win.set_default_size(PANEL_WIDTH, -1)
         win.set_resizable(False)
+        win.set_decorated(False)
+        self._win = win
+
+        # Layer shell: overlay that drops down from waybar
+        LayerShell.init_for_window(win)
+        LayerShell.set_layer(win, LayerShell.Layer.OVERLAY)
+        LayerShell.set_namespace(win, "elgato-panel")
+
+        # Anchor top — panel hangs from the top edge
+        LayerShell.set_anchor(win, LayerShell.Edge.TOP, True)
+        LayerShell.set_anchor(win, LayerShell.Edge.BOTTOM, False)
+        LayerShell.set_anchor(win, LayerShell.Edge.LEFT, False)
+        LayerShell.set_anchor(win, LayerShell.Edge.RIGHT, False)
+
+        # Position: below waybar, horizontally near the cursor (where the widget was clicked)
+        LayerShell.set_margin(win, LayerShell.Edge.TOP, WAYBAR_HEIGHT + PANEL_MARGIN_TOP)
+
+        # Request keyboard interactivity so we can detect focus loss and Escape
+        LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.ON_DEMAND)
+
+        # We'll set the horizontal margin after the window is mapped and we know the screen width
+        win.connect("map", self._on_map)
+        win.connect("notify::is-active", self._on_focus_change)
+        win.connect("close-request", self._on_close)
+
+        # Escape key closes the panel
+        esc_controller = Gtk.EventControllerKey()
+        esc_controller.connect("key-pressed", self._on_key_pressed)
+        win.add_controller(esc_controller)
 
         # Main layout
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -256,7 +302,7 @@ class ControlPanel(Adw.Application):
         main_box.set_margin_bottom(16)
         main_box.set_margin_start(16)
         main_box.set_margin_end(16)
-        win.set_content(main_box)
+        win.set_child(main_box)
 
         # Light controls
         lights = _load_lights()
@@ -293,20 +339,82 @@ class ControlPanel(Adw.Application):
         css = Gtk.CssProvider()
         css.load_from_string(
             """
-            .light-name { font-weight: bold; font-size: 14px; }
+            window {
+                background-color: rgba(30, 30, 46, 0.95);
+                border-radius: 0 0 12px 12px;
+                border: 1px solid rgba(122, 162, 247, 0.3);
+                border-top: none;
+            }
+            .light-name { font-weight: bold; font-size: 14px; color: #cdd6f4; }
             .light-frame { margin-bottom: 4px; }
             .preset-btn { min-width: 50px; }
             """
         )
         Gtk.StyleContext.add_provider_for_display(
-            win.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
         win.present()
 
+    def _on_map(self, win: Gtk.Window) -> None:
+        """Position the panel horizontally once we know screen dimensions."""
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+
+        surface = win.get_surface()
+        if surface is None:
+            return
+
+        monitor = display.get_monitor_at_surface(surface)
+        if monitor is None:
+            # Fall back to first monitor
+            monitors = display.get_monitors()
+            if monitors.get_n_items() > 0:
+                monitor = monitors.get_item(0)
+            else:
+                return
+
+        screen_width = monitor.get_geometry().width
+
+        # Try to center the panel on the cursor X position
+        cursor_x = _get_cursor_x()
+        if cursor_x is not None:
+            # Calculate left margin so panel is centered on cursor
+            left = cursor_x - (PANEL_WIDTH // 2)
+            # Clamp so the panel doesn't clip off either edge
+            left = max(SCREEN_EDGE_PAD, min(left, screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD))
+        else:
+            # Fallback: right-aligned with padding
+            left = screen_width - PANEL_WIDTH - SCREEN_EDGE_PAD
+
+        # Layer shell: anchor left edge and set left margin for positioning
+        LayerShell.set_anchor(win, LayerShell.Edge.LEFT, True)
+        LayerShell.set_margin(win, LayerShell.Edge.LEFT, left)
+
+    def _on_focus_change(self, win: Gtk.Window, pspec) -> None:
+        """Close when the panel loses focus."""
+        if not win.is_active():
+            # Small delay to avoid closing during transient focus changes (e.g. slider grab)
+            GLib.timeout_add(150, self._check_still_unfocused, win)
+
+    def _check_still_unfocused(self, win: Gtk.Window) -> bool:
+        if not win.is_active():
+            win.close()
+        return False
+
+    def _on_key_pressed(self, controller, keyval, keycode, state) -> bool:
+        if keyval == Gdk.KEY_Escape:
+            self._win.close()
+            return True
+        return False
+
+    def _on_close(self, win: Gtk.Window) -> bool:
+        self._win = None
+        return False
+
     def _on_preset(self, btn: Gtk.Button, name: str, preset: dict) -> None:
         for light_name, ctrl in self.controls.items():
-            # Check for per-light override
             if light_name in preset and isinstance(preset[light_name], dict):
                 override = preset[light_name]
                 ctrl.set_values(override["brightness"], override["temperature"])
