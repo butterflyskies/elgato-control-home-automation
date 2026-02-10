@@ -271,7 +271,8 @@ class LightControl:
         bright_label.set_halign(Gtk.Align.START)
         bright_box.append(bright_label)
 
-        self.brightness_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 3, 100, 1)
+        self.brightness_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 3, 100, 0.01)
+        self.brightness_scale.set_round_digits(-1)
         self.brightness_scale.set_value(50)
         self.brightness_scale.set_hexpand(True)
         self.brightness_scale.connect("value-changed", self._on_slider_changed)
@@ -289,7 +290,8 @@ class LightControl:
         temp_label.set_halign(Gtk.Align.START)
         temp_box.append(temp_label)
 
-        self.temp_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 143, 344, 1)
+        self.temp_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 143, 344, 0.01)
+        self.temp_scale.set_round_digits(-1)
         self.temp_scale.set_value(200)
         self.temp_scale.set_hexpand(True)
         self.temp_scale.set_inverted(True)
