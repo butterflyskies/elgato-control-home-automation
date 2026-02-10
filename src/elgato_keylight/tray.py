@@ -14,6 +14,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -345,14 +346,13 @@ class LightControl:
     def _schedule_update(self) -> None:
         if self._debounce_id is not None:
             GLib.source_remove(self._debounce_id)
-        self._debounce_id = GLib.timeout_add(150, self._send_update)
+        self._debounce_id = GLib.timeout_add(30, self._send_update)
 
     def _send_update(self) -> bool:
         self._debounce_id = None
-        try:
-            _set_light_state(self.host, self.port, self.current_on, self.current_brightness, self.current_temperature)
-        except Exception:
-            pass
+        host, port = self.host, self.port
+        on, bri, temp = self.current_on, self.current_brightness, self.current_temperature
+        threading.Thread(target=_set_light_state, args=(host, port, on, bri, temp), daemon=True).start()
         return False
 
     def set_values(self, brightness: int, temperature: int, on: bool = True) -> None:
