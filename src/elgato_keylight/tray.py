@@ -359,7 +359,22 @@ class ElgatoApp(Adw.Application):
             self.hold()  # Keep alive with no visible windows
 
         self._build_panel()
-        self._poll_status()
+
+        # Map the panel window once (invisible, off-screen) so it's always mapped.
+        # Future show/hide just moves it on/off screen — no re-map, no placement animation.
+        _hyprctl_batch([
+            f"keyword windowrulev2 float,class:{APP_ID}",
+            f"keyword windowrulev2 pin,class:{APP_ID}",
+            f"keyword windowrulev2 noanim,class:{APP_ID}",
+            f"keyword windowrulev2 noborder,class:{APP_ID}",
+            f"keyword windowrulev2 noshadow,class:{APP_ID}",
+            f"keyword windowrulev2 opacity 0.0 override 0.0 override,class:{APP_ID}",
+        ])
+        self._panel_window.present()
+        # Park off-screen after the map event processes (idle fires after pending events)
+        GLib.idle_add(self._park_panel_offscreen)
+        # Defer status poll so it doesn't block the parking
+        GLib.idle_add(self._poll_status)
         GLib.timeout_add_seconds(POLL_SECONDS, self._poll_status)
 
     def _on_activate(self, app: Adw.Application) -> None:
@@ -367,6 +382,19 @@ class ElgatoApp(Adw.Application):
             self._skip_first_activate = False
             return
         self._toggle_panel()
+
+    def _park_panel_offscreen(self) -> bool:
+        """After initial map, move off-screen and clear one-shot opacity rule."""
+        _hyprctl_batch([
+            f"dispatch movewindowpixel exact 99999 99999,class:{APP_ID}",
+            f"keyword windowrulev2 unset,class:{APP_ID}",
+            f"keyword windowrulev2 float,class:{APP_ID}",
+            f"keyword windowrulev2 pin,class:{APP_ID}",
+            f"keyword windowrulev2 noanim,class:{APP_ID}",
+            f"keyword windowrulev2 noborder,class:{APP_ID}",
+            f"keyword windowrulev2 noshadow,class:{APP_ID}",
+        ])
+        return False
 
     # --- SNI Tray ---
 
@@ -638,40 +666,22 @@ class ElgatoApp(Adw.Application):
                       min(panel_x, mon_x + eff_w - PANEL_WIDTH - SCREEN_EDGE_PAD))
         panel_y = mon_y + WAYBAR_HEIGHT + PANEL_GAP
 
-        # Map the window invisible — Hyprland will place it at center but nobody sees
+        # Window is already mapped off-screen — just move it into place
         _hyprctl_batch([
-            f"keyword windowrulev2 unset,class:{APP_ID}",
-            f"keyword windowrulev2 float,class:{APP_ID}",
-            f"keyword windowrulev2 pin,class:{APP_ID}",
-            f"keyword windowrulev2 noanim,class:{APP_ID}",
-            f"keyword windowrulev2 noborder,class:{APP_ID}",
-            f"keyword windowrulev2 noshadow,class:{APP_ID}",
-            f"keyword windowrulev2 opacity 0.0 override 0.0 override,class:{APP_ID}",
+            f"dispatch movewindowpixel exact {panel_x} {panel_y},class:{APP_ID}",
+            f"dispatch focuswindow class:{APP_ID}",
         ])
-
-        self._panel_window.present()
         self._panel_visible = True
 
-        # Move to correct position then reveal
-        GLib.timeout_add(50, self._post_show, panel_x, panel_y)
         GLib.timeout_add(700, self._start_focus_poll)
-
-    def _post_show(self, x: int, y: int) -> bool:
-        """Move panel to correct position, then reveal it."""
-        _hyprctl_batch([
-            f"dispatch movewindowpixel exact {x} {y},class:{APP_ID}",
-            f"dispatch focuswindow class:{APP_ID}",
-            f"keyword windowrulev2 opacity 1.0 override 1.0 override,class:{APP_ID}",
-        ])
-        return False
 
     def _hide_panel(self) -> None:
         poll_id = self._focus_poll_id
         self._focus_poll_id = None
         if poll_id is not None:
             GLib.source_remove(poll_id)
-        if self._panel_window:
-            self._panel_window.set_visible(False)
+        # Move off-screen instead of unmapping — avoids re-map placement issues
+        _hyprctl_dispatch(f"movewindowpixel exact 99999 99999,class:{APP_ID}")
         self._panel_visible = False
 
     # --- Focus Polling ---
