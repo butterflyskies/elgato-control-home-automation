@@ -394,7 +394,7 @@ class ControlPanel(Adw.Application):
         css.load_from_string(
             """
             window.elgato-panel {
-                background-color: rgba(30, 30, 46, 0.95);
+                background-color: rgba(30, 30, 46, 0.98);
                 border-radius: 0 0 12px 12px;
                 border: 1px solid rgba(122, 162, 247, 0.3);
                 border-top: none;
