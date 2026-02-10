@@ -71,37 +71,6 @@ SNI_XML = """
 </node>
 """
 
-DBUSMENU_XML = """
-<node>
-  <interface name="com.canonical.dbusmenu">
-    <method name="GetLayout">
-      <arg name="parentId" type="i" direction="in"/>
-      <arg name="recursionDepth" type="i" direction="in"/>
-      <arg name="propertyNames" type="as" direction="in"/>
-      <arg name="revision" type="u" direction="out"/>
-      <arg name="layout" type="(ia{sv}av)" direction="out"/>
-    </method>
-    <method name="Event">
-      <arg name="id" type="i" direction="in"/>
-      <arg name="eventId" type="s" direction="in"/>
-      <arg name="data" type="v" direction="in"/>
-      <arg name="timestamp" type="u" direction="in"/>
-    </method>
-    <method name="AboutToShow">
-      <arg name="id" type="i" direction="in"/>
-      <arg name="needUpdate" type="b" direction="out"/>
-    </method>
-    <property name="Version" type="u" access="read"/>
-    <property name="Status" type="s" access="read"/>
-    <signal name="LayoutUpdated">
-      <arg type="u"/>
-      <arg type="i"/>
-    </signal>
-  </interface>
-</node>
-"""
-
-
 # --- HTTP helpers (stdlib only — no httpx, runs on system python) ---
 
 
@@ -418,16 +387,6 @@ class ElgatoApp(Adw.Application):
             None,
         )
 
-        # Register dbusmenu for right-click context menu
-        menu_node = Gio.DBusNodeInfo.new_for_xml(DBUSMENU_XML)
-        bus.register_object(
-            "/MenuBar",
-            menu_node.interfaces[0],
-            self._menu_method_call,
-            self._menu_get_property,
-            None,
-        )
-
         self._bus_name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
         Gio.bus_own_name_on_connection(
             bus, self._bus_name,
@@ -462,7 +421,7 @@ class ElgatoApp(Adw.Application):
         self._register_with_watcher()
 
     def _sni_method_call(self, conn, sender, path, iface, method, params, invocation):
-        if method == "Activate":
+        if method in ("Activate", "ContextMenu"):
             self._toggle_panel()
         elif method == "SecondaryActivate":
             subprocess.Popen(["elgato", "toggle"])
@@ -484,7 +443,7 @@ class ElgatoApp(Adw.Application):
             "IconName": GLib.Variant("s", self._icon_name),
             "IconThemePath": GLib.Variant("s", ""),
             "ItemIsMenu": GLib.Variant("b", False),
-            "Menu": GLib.Variant("o", "/MenuBar"),
+            "Menu": GLib.Variant("o", "/NO_DBUSMENU"),
         }
         return props.get(prop)
 
@@ -494,38 +453,6 @@ class ElgatoApp(Adw.Application):
                 None, "/StatusNotifierItem",
                 "org.kde.StatusNotifierItem", signal_name, None,
             )
-
-    # --- DBusMenu (right-click context menu) ---
-
-    def _menu_method_call(self, conn, sender, path, iface, method, params, invocation):
-        if method == "GetLayout":
-            # Root item (id=0) with one child: Quit (id=1)
-            quit_props = {
-                "label": GLib.Variant("s", "Quit"),
-                "icon-name": GLib.Variant("s", "application-exit"),
-                "enabled": GLib.Variant("b", True),
-                "visible": GLib.Variant("b", True),
-            }
-            quit_item = GLib.Variant("v", GLib.Variant("(ia{sv}av)", (1, quit_props, [])))
-            root_props = {"children-display": GLib.Variant("s", "submenu")}
-            layout = GLib.Variant("(ia{sv}av)", (0, root_props, [quit_item]))
-            invocation.return_value(GLib.Variant("(u(ia{sv}av))", (1, (0, root_props, [quit_item]))))
-        elif method == "Event":
-            item_id, event_id, _, _ = params.unpack()
-            if item_id == 1 and event_id == "clicked":
-                self.quit()
-            invocation.return_value(None)
-        elif method == "AboutToShow":
-            invocation.return_value(GLib.Variant("(b)", (False,)))
-        else:
-            invocation.return_value(None)
-
-    def _menu_get_property(self, conn, sender, path, iface, prop):
-        props = {
-            "Version": GLib.Variant("u", 3),
-            "Status": GLib.Variant("s", "normal"),
-        }
-        return props.get(prop)
 
     # --- Status Polling ---
 
@@ -617,10 +544,19 @@ class ElgatoApp(Adw.Application):
         listbox.connect("row-activated", self._on_preset_row_activated)
         main_box.append(listbox)
 
+        # Quit link (only in tray daemon mode)
+        if self._start_tray:
+            quit_btn = Gtk.Button(label="Quit Tray")
+            quit_btn.add_css_class("quit-link")
+            quit_btn.set_halign(Gtk.Align.END)
+            quit_btn.set_margin_top(4)
+            quit_btn.connect("clicked", lambda _: self.quit())
+            main_box.append(quit_btn)
+
         css = Gtk.CssProvider()
         css.load_from_string("""
             window {
-                background-color: rgba(30, 30, 46, 0.92);
+                background-color: rgba(30, 30, 46, 0.82);
                 border-radius: 0 0 12px 12px;
                 border: 1px solid rgba(122, 162, 247, 0.3);
                 border-top: none;
@@ -667,6 +603,18 @@ class ElgatoApp(Adw.Application):
                 font-weight: 600;
                 font-size: 13px;
                 color: #f38ba8;
+            }
+            .quit-link {
+                background: none;
+                border: none;
+                box-shadow: none;
+                font-size: 11px;
+                color: rgba(205, 214, 244, 0.35);
+                padding: 2px 8px;
+                min-height: 0;
+            }
+            .quit-link:hover {
+                color: rgba(205, 214, 244, 0.6);
             }
         """)
         Gtk.StyleContext.add_provider_for_display(
