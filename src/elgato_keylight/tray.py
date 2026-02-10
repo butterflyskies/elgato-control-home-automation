@@ -159,6 +159,13 @@ def _hyprctl_keyword(key: str, value: str) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _hyprctl_batch(commands: list[str]) -> None:
+    """Run multiple hyprctl commands atomically in a single IPC call."""
+    batch = " ; ".join(commands)
+    subprocess.run(["hyprctl", "--batch", batch], timeout=1,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def _get_cursor_pos() -> tuple[int, int]:
     try:
         data = _hyprctl_j("cursorpos")
@@ -631,30 +638,29 @@ class ElgatoApp(Adw.Application):
                       min(panel_x, mon_x + eff_w - PANEL_WIDTH - SCREEN_EDGE_PAD))
         panel_y = mon_y + WAYBAR_HEIGHT + PANEL_GAP
 
-        # Set Hyprland window rules with exact position (applied at window map time)
-        _hyprctl_keyword("windowrulev2", f"unset,class:{APP_ID}")
-        for rule in [
-            f"float,class:{APP_ID}",
-            f"pin,class:{APP_ID}",
-            f"noanim,class:{APP_ID}",
-            f"noborder,class:{APP_ID}",
-            f"noshadow,class:{APP_ID}",
-            f"move {panel_x} {panel_y},class:{APP_ID}",
-        ]:
-            _hyprctl_keyword("windowrulev2", rule)
+        # Set all Hyprland window rules atomically before the window maps
+        _hyprctl_batch([
+            f"keyword windowrulev2 unset,class:{APP_ID}",
+            f"keyword windowrulev2 float,class:{APP_ID}",
+            f"keyword windowrulev2 pin,class:{APP_ID}",
+            f"keyword windowrulev2 noanim,class:{APP_ID}",
+            f"keyword windowrulev2 noborder,class:{APP_ID}",
+            f"keyword windowrulev2 noshadow,class:{APP_ID}",
+            f"keyword windowrulev2 move {panel_x} {panel_y},class:{APP_ID}",
+        ])
 
         self._panel_window.present()
         self._panel_visible = True
 
-        # After Hyprland maps the window, focus it and ensure position
         GLib.timeout_add(50, self._post_show, panel_x, panel_y)
         GLib.timeout_add(700, self._start_focus_poll)
 
     def _post_show(self, x: int, y: int) -> bool:
-        """Focus panel and reinforce position after Hyprland maps it."""
-        _hyprctl_dispatch(f"focuswindow class:{APP_ID}")
-        # Belt and suspenders: also move via dispatch in case the rule didn't apply
-        _hyprctl_dispatch(f"movewindowpixel exact {x} {y},class:{APP_ID}")
+        """Focus panel after Hyprland maps it."""
+        _hyprctl_batch([
+            f"dispatch focuswindow class:{APP_ID}",
+            f"dispatch movewindowpixel exact {x} {y},class:{APP_ID}",
+        ])
         return False
 
     def _hide_panel(self) -> None:
