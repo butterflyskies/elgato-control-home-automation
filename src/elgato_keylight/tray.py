@@ -399,6 +399,8 @@ class ElgatoApp(Adw.Application):
     # --- Lifecycle ---
 
     def _on_startup(self, app: Adw.Application) -> None:
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.PREFER_DARK)
+
         self._lights = _load_lights()
         self._presets = _load_presets()
 
