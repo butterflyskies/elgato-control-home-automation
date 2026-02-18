@@ -64,6 +64,7 @@ class LightConfig:
     name: str
     host: str
     port: int = 9123
+    id: str = ""
 
     @property
     def base_url(self) -> str:
@@ -86,10 +87,17 @@ class Preset:
     temperature: int
     per_light: dict[str, PresetValues] = field(default_factory=dict)
 
-    def to_state(self, light_name: str | None = None, on: bool = True) -> LightState:
-        if light_name and light_name in self.per_light:
-            vals = self.per_light[light_name]
-            return LightState(on=on, brightness=vals.brightness, temperature=vals.temperature)
+    def to_state(
+        self,
+        light_name: str | None = None,
+        device_id: str | None = None,
+        on: bool = True,
+    ) -> LightState:
+        # Check per-light overrides by device ID first, then by name
+        for key in (device_id, light_name):
+            if key and key in self.per_light:
+                vals = self.per_light[key]
+                return LightState(on=on, brightness=vals.brightness, temperature=vals.temperature)
         return LightState(on=on, brightness=self.brightness, temperature=self.temperature)
 
 

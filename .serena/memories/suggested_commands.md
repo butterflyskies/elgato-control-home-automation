@@ -7,13 +7,11 @@
 - `uv run elgato-waybar` — output waybar JSON
 - `uv run elgato-mcp` — start MCP server
 
-## Tray/Panel (system python — not through uv)
+## Install
+- `uv tool install -e '.[gui,mcp]'` — full install (CLI + tray + MCP)
+- `uv tool install -e '.[mcp]'` — CLI + MCP only
 - `elgato-tray` — start combined tray daemon + panel
 - `elgato-panel` — toggle panel (activates running tray, or standalone)
-
-## Install
-- `uv tool install -e ".[mcp]"` — global CLI install
-- Tray/panel use wrapper scripts in `~/.local/bin/` (system python)
 
 ## Git
 - `GIT_CONFIG_GLOBAL=~/.gitconfig.ai git ...` — all git operations

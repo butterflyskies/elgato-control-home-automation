@@ -114,71 +114,33 @@ def _load_lights() -> list[dict]:
             data = tomllib.load(f)
         lights = data.get("lights", [])
         if lights:
-            return [{"name": l["name"], "host": l["host"], "port": l.get("port", 9123)} for l in lights]
+            return [
+                {"name": l["name"], "host": l["host"], "port": l.get("port", 9123), "id": l.get("id", "")}
+                for l in lights
+            ]
 
-    return _discover_lights()
+    from elgato_keylight.discovery import discover_lights
 
-
-def _discover_lights() -> list[dict]:
-    """Discover Elgato lights via mDNS (avahi-browse)."""
-    try:
-        out = subprocess.check_output(
-            ["avahi-browse", "-rpt", "_elg._tcp"],
-            timeout=5, stderr=subprocess.DEVNULL,
-        ).decode()
-    except Exception:
-        return []
-
-    lights = []
-    seen = set()
-    for line in out.splitlines():
-        # Resolved IPv4 lines: =;iface;IPv4;name;_elg._tcp;domain;hostname;ip;port;txt...
-        if not line.startswith("=") or ";IPv4;" not in line:
-            continue
-        parts = line.split(";")
-        if len(parts) < 9:
-            continue
-        raw_name = parts[3].replace("\\032", " ")
-        host = parts[7]
-        port = int(parts[8])
-        if host in seen:
-            continue
-        seen.add(host)
-        # Extract short name: "Elgato Key Light - right" -> "right"
-        name = raw_name
-        if " - " in raw_name:
-            name = raw_name.split(" - ", 1)[1].strip()
-        # Extract device ID from TXT record: "id=3C:6A:9D:1A:36:45"
-        device_id = ""
-        txt = ";".join(parts[9:]) if len(parts) > 9 else ""
-        for token in txt.replace('"', " ").split():
-            if token.startswith("id="):
-                device_id = token[3:]
-                break
-        lights.append({"name": name.lower(), "host": host, "port": port, "id": device_id})
-
-    lights.sort(key=lambda l: l["name"])
-    return lights
+    return [
+        {"name": lc.name, "host": lc.host, "port": lc.port, "id": lc.id}
+        for lc in discover_lights()
+    ]
 
 
 def _load_presets() -> dict[str, dict]:
-    config_path = Path.home() / ".config" / "elgato-keylight" / "config.toml"
     defaults = {
-        "webcam": {"brightness": 32, "temperature": 179,
-                    "3C:6A:9D:1A:36:45": {"brightness": 18, "temperature": 181},
-                    "3C:6A:9D:1A:36:46": {"brightness": 46, "temperature": 177}},
         "bright": {"brightness": 100, "temperature": 200},
         "dim": {"brightness": 15, "temperature": 250},
         "warm": {"brightness": 60, "temperature": 320},
         "cool": {"brightness": 70, "temperature": 155},
         "video": {"brightness": 55, "temperature": 215},
     }
+    config_path = Path.home() / ".config" / "elgato-keylight" / "config.toml"
     if config_path.exists():
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
-        presets = data.get("presets", {})
-        if presets:
-            return presets
+        # Merge config presets on top of built-in defaults
+        defaults.update(data.get("presets", {}))
     return defaults
 
 
@@ -599,22 +561,6 @@ class ElgatoApp(Adw.Application):
             row = self._make_preset_row(name, preset)
             listbox.append(row)
 
-        # Off row
-        off_row = Gtk.ListBoxRow()
-        off_row.add_css_class("preset-off-row")
-        off_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        off_box.set_margin_top(8)
-        off_box.set_margin_bottom(8)
-        off_box.set_margin_start(12)
-        off_box.set_margin_end(12)
-        off_label = Gtk.Label(label="All Off")
-        off_label.add_css_class("preset-off-label")
-        off_label.set_hexpand(True)
-        off_label.set_halign(Gtk.Align.CENTER)
-        off_box.append(off_label)
-        off_row.set_child(off_box)
-        listbox.append(off_row)
-
         listbox.connect("row-activated", self._on_preset_row_activated)
         main_box.append(listbox)
 
@@ -682,14 +628,6 @@ class ElgatoApp(Adw.Application):
             .preset-detail {
                 font-size: 12px;
                 color: rgba(205, 214, 244, 0.5);
-            }
-            .preset-off-row:hover {
-                background-color: rgba(243, 139, 168, 0.12);
-            }
-            .preset-off-label {
-                font-weight: 600;
-                font-size: 13px;
-                color: #f38ba8;
             }
             .quit-link {
                 background: none;
@@ -872,18 +810,16 @@ class ElgatoApp(Adw.Application):
         return row
 
     def _on_preset_row_activated(self, listbox: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
-        if hasattr(row, "_preset_data"):
-            preset = row._preset_data
-            for light_name, ctrl in self._controls.items():
-                # Look up per-device override by device ID
-                device_settings = preset.get(ctrl.device_id) if ctrl.device_id else None
-                if isinstance(device_settings, dict):
-                    ctrl.set_values(device_settings["brightness"], device_settings["temperature"])
-                else:
-                    ctrl.set_values(preset.get("brightness", 50), preset.get("temperature", 200))
-        else:
-            for ctrl in self._controls.values():
-                ctrl.set_values(ctrl.current_brightness, ctrl.current_temperature, on=False)
+        if not hasattr(row, "_preset_data"):
+            return
+        preset = row._preset_data
+        for light_name, ctrl in self._controls.items():
+            # Look up per-device override by device ID
+            device_settings = preset.get(ctrl.device_id) if ctrl.device_id else None
+            if isinstance(device_settings, dict):
+                ctrl.set_values(device_settings["brightness"], device_settings["temperature"])
+            else:
+                ctrl.set_values(preset.get("brightness", 50), preset.get("temperature", 200))
 
 
 def main():

@@ -1,7 +1,8 @@
-"""Configuration loader with hardcoded defaults."""
+"""Configuration loader with mDNS discovery fallback."""
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 
@@ -9,36 +10,40 @@ from elgato_keylight.models import AppConfig, LightConfig, Preset, PresetValues
 
 CONFIG_PATH = Path.home() / ".config" / "elgato-keylight" / "config.toml"
 
-# Hardcoded defaults so it works out of the box
-DEFAULT_LIGHTS = [
-    LightConfig(name="right", host="192.168.0.60"),
-    LightConfig(name="left", host="192.168.0.62"),
-]
-
 DEFAULT_PRESETS = {
     "bright": Preset(brightness=100, temperature=200),
     "dim": Preset(brightness=15, temperature=250),
     "warm": Preset(brightness=60, temperature=320),
     "cool": Preset(brightness=70, temperature=155),
     "video": Preset(brightness=55, temperature=215),
-    "webcam": Preset(
-        brightness=32,
-        temperature=179,
-        per_light={
-            "right": PresetValues(brightness=18, temperature=181),
-            "left": PresetValues(brightness=46, temperature=177),
-        },
-    ),
 }
 
 
 def load_config() -> AppConfig:
-    """Load config from TOML file, falling back to hardcoded defaults."""
+    """Load config from TOML file, discovering lights via mDNS when needed."""
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "rb") as f:
             data = tomllib.load(f)
         return _parse_config(data)
-    return AppConfig(lights=list(DEFAULT_LIGHTS), presets=dict(DEFAULT_PRESETS))
+
+    # No config file — discover lights and use default presets
+    lights = _discover_fallback()
+    return AppConfig(lights=lights, presets=dict(DEFAULT_PRESETS))
+
+
+def _discover_fallback() -> list[LightConfig]:
+    """Try mDNS discovery, printing an error if nothing is found."""
+    from elgato_keylight.discovery import discover_lights
+
+    lights = discover_lights()
+    if not lights:
+        print(
+            "elgato-keylight: no lights found — configure them in "
+            "~/.config/elgato-keylight/config.toml or ensure they are "
+            "on the local network",
+            file=sys.stderr,
+        )
+    return lights
 
 
 def _parse_config(data: dict) -> AppConfig:
@@ -49,6 +54,7 @@ def _parse_config(data: dict) -> AppConfig:
                 name=light_data["name"],
                 host=light_data["host"],
                 port=light_data.get("port", 9123),
+                id=light_data.get("id", ""),
             )
         )
 
@@ -70,10 +76,10 @@ def _parse_config(data: dict) -> AppConfig:
             per_light=per_light,
         )
 
-    return AppConfig(
-        lights=lights if lights else list(DEFAULT_LIGHTS),
-        presets=presets,
-    )
+    if not lights:
+        lights = _discover_fallback()
+
+    return AppConfig(lights=lights, presets=presets)
 
 
 def get_lights(names: list[str] | None = None) -> list[LightConfig]:

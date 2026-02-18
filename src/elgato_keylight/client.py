@@ -13,6 +13,7 @@ class KeyLight:
     def __init__(self, config: LightConfig, timeout: float = 5.0):
         self.config = config
         self.name = config.name
+        self.device_id = config.id
         self._client = httpx.AsyncClient(
             base_url=config.base_url,
             timeout=timeout,

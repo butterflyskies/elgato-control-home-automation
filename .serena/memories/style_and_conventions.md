@@ -13,9 +13,9 @@
 - Uses stdlib only (no httpx) — must run on system python
 - urllib.request for HTTP, tomllib for TOML, json for JSON
 - GLib.timeout_add for async scheduling within GTK main loop
-- Debounced slider updates (150ms)
+- Debounced slider updates (50ms)
 
 ## General
 - Keep solutions simple, avoid over-engineering
-- Hardcoded defaults for the two known lights, config file optional
-- Presets support per-light overrides (e.g., webcam preset has different brightness for left/right)
+- mDNS discovery as fallback when no config file — no hardcoded light IPs
+- Presets support per-light overrides keyed by device ID or light name

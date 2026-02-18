@@ -162,7 +162,7 @@ async def apply_preset(preset_name: str, light_names: list[str] | None = None) -
     clients = await _get_clients(light_names)
     try:
         for c in clients:
-            await c.set_state(p.to_state(light_name=c.name, on=True))
+            await c.set_state(p.to_state(light_name=c.name, device_id=c.device_id, on=True))
     finally:
         await _close_all(clients)
     return f"Preset '{preset_name}' applied."

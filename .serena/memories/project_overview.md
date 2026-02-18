@@ -16,8 +16,9 @@ Python toolset for controlling Elgato Key Lights from CLI, waybar, MCP server, s
 ```
 src/elgato_keylight/
   __init__.py          # re-exports
-  models.py            # LightState, DeviceInfo, LightConfig dataclasses
+  models.py            # LightState, DeviceInfo, LightConfig, Preset dataclasses
   config.py            # TOML config loader (~/.config/elgato-keylight/config.toml)
+  discovery.py         # mDNS light discovery via avahi-browse (stdlib only)
   client.py            # KeyLight async HTTP client (httpx)
   effects.py           # flash, pulse, celebration, alert, dim, mood effects
   cli.py               # Click CLI (entry point: elgato)
@@ -37,19 +38,15 @@ All entry points defined in pyproject.toml, installed via `uv tool install`:
 ```bash
 uv tool install 'elgato-keylight[gui,mcp]'
 ```
-PyGObject builds from source — needs system dev headers (gobject-introspection-devel, cairo-devel, gtk4-devel, libadwaita-devel). Must be built inside raptor distrobox on the user's immutable Bazzite host.
+PyGObject builds from source — needs system dev headers (gobject-introspection-devel, cairo-devel, gtk4-devel, libadwaita-devel).
 
 ## Key Design Decisions
+- No hardcoded light IPs — all paths use mDNS discovery as fallback when no config file exists
+- Config at `~/.config/elgato-keylight/config.toml` — presets keyed by device hardware ID (from avahi TXT `id=...` field)
+- `Preset.to_state()` resolves per-light overrides by device ID first, then by light name
 - Tray + panel are a single `Adw.Application` process (combined for instant panel show/hide)
 - Raw D-Bus SNI protocol (not AppIndicator3) gives direct click handling
-- PyGObject installed as pip dependency via `[gui]` extra (no longer requires system python shims)
-- Config at `~/.config/elgato-keylight/config.toml` — presets keyed by device hardware ID (from avahi TXT `id=...` field)
-- Lights discovered via mDNS (`avahi-browse -rpt _elg._tcp`) when no config lights section present
+- PyGObject installed as pip dependency via `[gui]` extra
+- Five built-in presets (bright/dim/warm/cool/video); config presets merge on top
 - Panel always-mapped off-screen (99999,99999), moved to tray icon position on show
-- Static hyprland windowrulev2 rules for panel class `dev.butterflysky.elgato-panel`
-
-## User's Environment
-- Hyprland compositor on Wayland
-- Waybar bar (custom/lights module removed — replaced by tray icon)
-- Monitor: HDMI-A-1 (7680x2160 @ 0,0 scale 1.0), DP-2 (3840x1600 @ -1600,-1200 transform 3)
-- Catppuccin theme, accent #7aa2f7
+- Tokyo Night theme colors, accent #7aa2f7
