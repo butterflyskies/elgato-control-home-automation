@@ -750,8 +750,10 @@ class ElgatoApp(Adw.Application):
                       min(panel_x, mon_x + eff_w - PANEL_WIDTH - SCREEN_EDGE_PAD))
         panel_y = mon_y + WAYBAR_HEIGHT + PANEL_GAP
 
-        # Window is always mapped — just move it into place and focus
+        # Move panel to active workspace first, then position and focus
+        ws_id = monitor.get("activeWorkspace", {}).get("id", 1)
         _hyprctl_batch([
+            f"dispatch movetoworkspacesilent {ws_id},class:{APP_ID}",
             f"dispatch movewindowpixel exact {panel_x} {panel_y},class:{APP_ID}",
             f"dispatch focuswindow class:{APP_ID}",
         ])
