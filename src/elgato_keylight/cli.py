@@ -227,7 +227,7 @@ def preset(ctx, name):
         clients = await _get_clients(ctx.obj["lights"])
         try:
             for c in clients:
-                state = p.to_state(light_name=c.name, on=True)
+                state = p.to_state(light_name=c.name, device_id=c.device_id, on=True)
                 await c.set_state(state)
                 click.echo(f"{c.name}: preset '{name}' applied")
         finally:
