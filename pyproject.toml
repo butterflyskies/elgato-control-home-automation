@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = ["PyGObject>=3.50"]
 mcp = ["mcp>=1.0"]
 discovery = ["zeroconf>=0.131"]
 
@@ -20,6 +21,8 @@ discovery = ["zeroconf>=0.131"]
 elgato = "elgato_keylight.cli:cli"
 elgato-waybar = "elgato_keylight.waybar:main"
 elgato-mcp = "elgato_keylight.mcp_server:main"
+elgato-tray = "elgato_keylight._gui:tray"
+elgato-panel = "elgato_keylight._gui:panel"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/elgato_keylight"]
