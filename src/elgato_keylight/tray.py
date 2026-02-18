@@ -97,7 +97,10 @@ def _get_light_state(host: str, port: int) -> dict:
 
 def _set_light_state(host: str, port: int, on: int, brightness: int, temperature: int) -> None:
     payload = {"numberOfLights": 1, "lights": [{"on": on, "brightness": brightness, "temperature": temperature}]}
-    _api_put(host, port, "/elgato/lights", payload)
+    try:
+        _api_put(host, port, "/elgato/lights", payload)
+    except Exception:
+        pass
 
 
 # --- Config loading ---
@@ -348,7 +351,7 @@ class LightControl:
     def _schedule_update(self) -> None:
         if self._debounce_id is not None:
             GLib.source_remove(self._debounce_id)
-        self._debounce_id = GLib.idle_add(self._send_update)
+        self._debounce_id = GLib.timeout_add(50, self._send_update)
 
     def _send_update(self) -> bool:
         self._debounce_id = None
