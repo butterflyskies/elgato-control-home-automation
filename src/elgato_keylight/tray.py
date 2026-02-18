@@ -409,7 +409,7 @@ class ElgatoApp(Adw.Application):
         # float/pin/noanim/noborder/noshadow. Future show/hide just moves it.
         self._panel_window.present()
         GLib.idle_add(self._park_panel_offscreen)
-        GLib.idle_add(self._poll_status)
+        GLib.idle_add(lambda: self._poll_status() and False)
         GLib.timeout_add_seconds(POLL_SECONDS, self._poll_status)
 
     def _on_activate(self, app: Adw.Application) -> None:
