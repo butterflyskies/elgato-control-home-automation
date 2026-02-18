@@ -50,3 +50,4 @@ PyGObject builds from source — needs system dev headers (gobject-introspection
 - Five built-in presets (bright/dim/warm/cool/video); config presets merge on top
 - Panel always-mapped off-screen (99999,99999), moved to tray icon position on show
 - Tokyo Night theme colors, accent #7aa2f7
+- "All Off" row removed from panel — master toggle at top handles on/off
