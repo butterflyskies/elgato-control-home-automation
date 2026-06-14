@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["PyGObject>=3.50"]
 mcp = ["mcp>=1.0"]
-discovery = ["zeroconf>=0.131"]
+discovery = ["zeroconf>=0.149.12"]
 
 [project.scripts]
 elgato = "elgato_keylight.cli:cli"
